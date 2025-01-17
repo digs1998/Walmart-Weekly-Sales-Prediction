@@ -1,0 +1,449 @@
+---
+title: "Final_ARIMA"
+author: "Xiaoqing Xia, Digvijay Yadav"
+date: "2023-05-16"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(readr)
+tra <- read_csv("~/Desktop/QBS 126/Final Project/train_combine.csv")
+head(tra)
+```
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+total_len <- nrow(tra)
+train_len <- round(0.9 *total_len)
+test_len <- total_len - train_len
+
+# Split the dataset into training and test sets
+train <- tra[1:train_len,]
+test <- tra[(train_len + 1):total_len,]
+```
+
+### Selecting Subset of Department and Store
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Calculate the total weekly sales by store
+total_sales_by_store <- train %>%
+  group_by(Store) %>%
+  summarize(Total_Weekly_Sales = sum(Weekly_Sales)) %>%
+  arrange(desc(Total_Weekly_Sales))
+
+# Plot total weekly sales by store
+ggplot(total_sales_by_store, aes(x = reorder(Store, Total_Weekly_Sales,decreasing = TRUE), y = Total_Weekly_Sales)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(x = "Store", y = "Total Weekly Sales") +
+  ggtitle("Total Weekly Sales by Store (Highest to Lowest)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+head(total_sales_by_store)
+```
+The top store with highest total weekly sales is 20.
+
+
+```{r}
+store_20_data <- train %>%
+  filter(Store == 20) %>%
+  group_by(Dept) %>%
+  summarize(Total_Weekly_Sales = sum(Weekly_Sales)) %>%
+  arrange(desc(Total_Weekly_Sales))
+
+# Plot total weekly sales by department for Store 20
+ggplot(store_20_data, aes(x = reorder(Dept, Total_Weekly_Sales,decreasing = TRUE), y = Total_Weekly_Sales)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(x = "Department", y = "Total Weekly Sales") +
+  ggtitle("Total Weekly Sales by Department (Store 20)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+The top department is 92. I will choose the 92nd department in Store 20.
+
+```{r}
+train_data <- train %>%
+  filter(Store == 20, Dept == 92)
+train_data
+```
+
+```{r}
+ggplot(train_data, aes(x = Date, y = Weekly_Sales)) +
+  geom_line() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "Date", y = "Weekly Sales") +
+  ggtitle("Weekly Sales over Time")
+```
+
+The subset is not stationary.
+
+```{r}
+train_data
+```
+
+### Seasonal Plot
+```{r}
+library(forecast)
+train_df=ts(train_data$Weekly_Sales,start=c(2010,05) ,frequency= 52)
+var(train_df)
+
+seasonplot(train_df, 52, col=rainbow(3), year.labels=TRUE, main="Seasonal Plot")
+```
+
+```{r}
+var(train_data$Weekly_Sales)
+```
+
+### Detrend Dataset
+
+Since the value of weekly sales range from 0 to 700000, which means weekly sales contain large values. I prefer to use log function to standardize the variance by compressing large values and expanding small values.
+
+```{r}
+log_data <- train_data %>%
+  mutate(log_Weekly_Sales = log(Weekly_Sales))
+ggplot(log_data, aes(x = Date, y = log_Weekly_Sales)) +
+  geom_line() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "Date", y = "log_Weekly_Sales") +
+  ggtitle(" Log Weekly Sales over Time")
+
+var(log_data$log_Weekly_Sales)
+```
+
+difference it once 
+```{r}
+
+log_diff_data <- log_data %>%
+  mutate(diff_Weekly_Sales = log_Weekly_Sales- lag(log_Weekly_Sales))
+ggplot(log_diff_data, aes(x = Date, y = diff_Weekly_Sales)) +
+  geom_line() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "Date", y = "Diff_log_Weekly_Sales") +
+  ggtitle(" Diff Log Weekly Sales over Time")
+
+clean_data <- na.omit(log_diff_data$diff_Weekly_Sales)
+var(clean_data)
+```
+
+```{r}
+
+log_diff1_data <- log_diff_data %>%
+  mutate(diff2_Weekly_Sales = diff_Weekly_Sales- lag(diff_Weekly_Sales))
+ggplot(log_diff1_data, aes(x = Date, y = diff2_Weekly_Sales)) +
+  geom_line() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "Date", y = "Diff2_log_Weekly_Sales") +
+  ggtitle(" Diff Log Weekly Sales over Time")
+
+clean_data <- na.omit(log_diff1_data$diff2_Weekly_Sales)
+var(clean_data)
+```
+
+
+```{r}
+library(tseries)
+
+# Perform ADF test
+adf_result <- adf.test(na.omit(log_diff_data$diff_Weekly_Sales))
+
+# Print the ADF test results
+print(adf_result)
+
+```
+There is no trend in the subset. It's stationary now. 
+
+```{r}
+train_df=ts(log_data$log_Weekly_Sales,start=c(2010,5) ,frequency =7)
+var(train_df)
+
+hist(log_diff_data$diff_Weekly_Sales)
+hist(log_data$log_Weekly_Sales)
+```
+
+### Modeling ARIMA Model
+```{r}
+library(forecast)
+acf(na.omit(log_diff_data$diff_Weekly_Sales), main = "ACF Plot")
+
+pacf(na.omit(log_diff_data$diff_Weekly_Sales), main = "PACF Plot")
+
+```
+
+```{r}
+weekly_sales_ts <- ts(log_diff_data$diff_Weekly_Sales, frequency =52)
+arima_model <- auto.arima(log_diff_data$diff_Weekly_Sales)
+      
+print(arima_model)
+```
+
+### Checking Residuals
+```{r}
+# Get the residuals of the ARIMA model
+residuals_arima <- residuals(arima_model)
+
+# Plot the residuals
+plot(residuals_arima, type = "l", main = "Residuals of ARIMA Model", xlab = "Observation", ylab = "Residuals")
+```
+```{r}
+checkresiduals(arima_model)
+```
+
+```{r}
+par(mfrow = c(2, 2)) 
+# Generate histogram and QQ-plot of residuals
+hist(residuals_arima, breaks = "FD", freq = FALSE, main = "Histogram of Residuals")
+qqnorm(residuals_arima)
+qqline(residuals_arima)
+acf(residuals_arima)
+pacf(residuals_arima)
+```
+I can discover that all of the ACF and PACF are approximately within the 95%
+confidence interval, which means the model contain the constant variance of error.
+
+# Independence Test
+```{r}
+shapiro_test <- shapiro.test(residuals_arima)
+
+print(shapiro_test)
+```
+
+# Correlation Test
+```{r}
+box_ljung_test <- Box.test(residuals_arima, lag = 20, type = "Ljung-Box")
+
+print(box_ljung_test)
+```
+
+```{r}
+box_pierce_test <- Box.test(residuals_arima, lag = 20, type = "Box-Pierce")
+
+print(box_pierce_test)
+```
+
+
+### ARIMA Prediction 
+```{r}
+# Obtain predicted values
+pred = c(NA,na.omit(log_diff_data$diff_Weekly_Sales) - residuals_arima)
+
+ggplot()+
+  geom_line(aes(log_diff_data$Date,log_diff_data$diff_Weekly_Sales),color = 'darkgreen')+
+  geom_line(aes(log_diff_data$Date,pred),color='orange')+
+  #geom_point(aes(log_diff_datas$Date, test_data$diff_Weekly_Sales), color = 'blue') +
+  xlab("Weeks")+
+  ylab("Weekly Sales (Log Transformed)") +
+  theme_minimal() 
+
+```
+
+
+```{r}
+test_data <- test %>%
+  filter(Store == 20, Dept == 92)
+```
+
+
+```{r}
+log_datas <- test_data %>%
+  mutate(log_Weekly_Sales = log(Weekly_Sales))
+
+log_diff_datas <- log_datas %>%
+  mutate(diff_Weekly_Sales = log_Weekly_Sales- lag(log_Weekly_Sales))
+```
+
+```{r}
+# Predict sales for the test dataset
+predicted_test <- c(NA,predict(arima_model, n.ahead = nrow(test_data)))
+length(log_diff_datas$Date)
+```
+
+```{r}
+ggplot()+
+  geom_line(aes(log_diff_data$Date,log_diff_data$diff_Weekly_Sales),color = 'darkgreen')+
+  geom_line(aes(log_diff_data$Date,pred),color='orange')+
+  geom_point(aes(log_diff_datas$Date, log_diff_datas$diff_Weekly_Sales), color = 'blue') +
+  geom_point(aes(log_diff_datas$Date, predicted_test$pred), color = 'purple') +
+  geom_ribbon(aes(x = log_diff_datas$Date, ymin = predicted_test$pred - 2 * predicted_test$se, ymax = predicted_test$pred + 2 * predicted_test$se), alpha = 0.3, fill = 'orange') +
+  xlab("Weeks")+
+  ylab("Weekly Sales (Log Transformed)") +
+  theme_minimal() 
+
+```
+
+```{r}
+
+ggplot()+
+  geom_line(aes(log_diff_datas$Date,log_diff_datas$diff_Weekly_Sales),color = 'darkgreen')+
+  geom_line(aes(log_diff_datas$Date,predicted_test$pred),color='orange')+
+  geom_ribbon(aes(x = log_diff_datas$Date, ymin = predicted_test$pred - 2 * predicted_test$se, ymax = predicted_test$pred + 2 * predicted_test$se), alpha = 0.3, fill = 'orange') +
+  xlab("Weeks") +
+  xlab("Weeks")+
+  ylab("Weekly Sales (Log Transformed)") +
+  theme_minimal() 
+```
+
+
+```{r}
+# Reverse differencing
+previous_observation <- tail(log_datas$log_Weekly_Sales, 1) # Last observed value in the original dataset
+predicted_original <- predicted_test$pred + previous_observation
+
+original =  exp(predicted_original)
+
+```
+
+```{r}
+ci_lower <- exp(predicted_test$pred - 2 * predicted_test$se + previous_observation)
+ci_upper <- exp(predicted_test$pred + 2 * predicted_test$se + previous_observation)
+
+```
+
+```{r}
+ggplot()+
+  geom_line(aes(log_diff_datas$Date,test_data$Weekly_Sales),color = 'darkgreen')+
+  geom_line(aes(log_diff_datas$Date,original),color='orange')+
+  geom_ribbon(aes(x = log_diff_datas$Date, ymin = ci_lower, ymax = ci_upper), alpha = 0.3, fill = 'orange') +
+  xlab("Weeks") +
+  xlab("Weeks")+
+  ylab("Weekly Sales (Original)") +
+  theme_minimal() 
+```
+
+
+```{r}
+ggplot()+
+  geom_line(aes(log_diff_data$Date,train_data$Weekly_Sales),color = 'darkgreen')+
+  geom_line(aes(log_diff_datas$Date, test_data$Weekly_Sales), color = 'blue') +
+  geom_line(aes(log_diff_datas$Date,original), color = 'purple') +
+  geom_ribbon(aes(x = log_diff_datas$Date, ymin = ci_lower, ymax = ci_upper), alpha = 0.3, fill = 'orange') +
+  xlab("Weeks")+
+  ylab("Weekly Sales") +
+  theme_minimal() 
+```
+
+Calculate Mean Absolute Error
+```{r}
+mae <- mean(abs(test_data$Weekly_Sales)-original)
+mae
+```
+
+
+Calculate R2 Score
+```{r}
+library(zoo)
+library(forecast)
+data <- data.frame(actual = test_data$Weekly_Sales, predicted = original)
+r_squared <- 1 - sum((test_data$Weekly_Sales - original)^2) / sum((test_data$Weekly_Sales - mean(test_data$Weekly_Sales))^2)
+r_squared
+accuracy <- accuracy(original, test_data$Weekly_Sales)
+#r2_score <- accuracy$R2
+tss <- sum((test_data$Weekly_Sales - mean(test_data$Weekly_Sales))^2)
+rss <- sum((test_data$Weekly_Sales - original)^2)
+r2_score <- 1 - (rss / tss)
+r2_score
+```
+
+```{r}
+store_data <- train %>%
+  filter(Store == 20)
+```
+
+
+
+
+
+### Finding best model for different Stores and different Department
+```{r}
+a <- list(20,4,14,13,2)
+arima_lists <- list()
+for (i in a){
+# Select data for one store (e.g., Store 1)
+store_data <- train[train$Store == i, ]
+
+# Group the data by department and calculate the total weekly sales
+department_sales <- aggregate(Weekly_Sales ~ Dept, data = store_data, FUN = sum)
+
+# Sort the departments by weekly sales in descending order
+top_departments <- department_sales[order(department_sales$Weekly_Sales, decreasing = TRUE), ]
+
+# Select the top 5 departments
+top_departments <- top_departments[1, ]
+
+# Subset the original data for the selected store and top 5 departments
+subset_data <- store_data[store_data$Dept %in% top_departments$Dept, ]
+
+log_data <- subset_data %>%
+  mutate(log_Weekly_Sales = log(Weekly_Sales))
+
+log_diff_data <- log_data %>%
+  mutate(diff_Weekly_Sales = log_Weekly_Sales- lag(log_Weekly_Sales))
+
+weekly_sales_ts <- ts(log_diff_data$diff_Weekly_Sales, frequency =52)
+arima_model <- auto.arima(log_diff_data$diff_Weekly_Sales,
+                        stationary=TRUE, seasonal=TRUE,approximation=TRUE,trace= TRUE)
+arima_lists[[i]] = arima_model
+
+  # Plot the forecast
+#plot(forecast_result, main = colnames(log_diff_data)[i])
+}
+
+```
+
+
+
+Apply ARIMA(3,0,2) with no Means for different subset of the dataset
+```{r}
+arima_model <- arima_model
+
+new_data <- subset(train, Store == 23 & Dept == 42)
+
+log_data <- new_data %>%
+  mutate(log_Weekly_Sales = log(Weekly_Sales))
+
+log_diff_data <- log_data %>%
+  mutate(diff_Weekly_Sales = log_Weekly_Sales- lag(log_Weekly_Sales))
+
+model <- arima(log_diff_data$diff_Weekly_Sales, order = c(3, 0, 2), include.mean = FALSE)
+model
+checkresiduals(model)
+#plot(actual_values, type = "l", col = "blue", xlim = c(0,200))
+#lines(forecasted_values, col = "red")
+#legend("topleft", legend = c("Actual", "Forecasted"), col = c("blue", "red"), lty = 1)
+```
+
+
+```{r}
+residuals_arima <- residuals(model)
+pred = na.omit(log_diff_data$diff_Weekly_Sales) - residuals_arima
+
+ggplot()+
+  geom_line(aes(log_diff_data$Date,log_diff_data$diff_Weekly_Sales),color = 'darkgreen')+
+  geom_line(aes(log_diff_data$Date,pred),color='orange')+
+  #geom_point(aes(log_diff_datas$Date, test_data$diff_Weekly_Sales), color = 'blue') +
+  xlab("Weeks")+
+  ylab("Weekly Sales (Log Transformed)") +
+  theme_minimal() 
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
